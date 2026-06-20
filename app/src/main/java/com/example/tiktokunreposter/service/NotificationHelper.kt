@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
+import com.example.tiktokunreposter.R
 
 class NotificationHelper(private val context: Context) {
     private val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -16,10 +17,10 @@ class NotificationHelper(private val context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "TikTok unreposter progress",
+                "TikTok repost removal",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Local foreground-service progress. No sensitive session data is shown."
+                description = "Shows local progress for repost removal"
                 setShowBadge(false)
             }
             manager.createNotificationChannel(channel)
@@ -27,8 +28,7 @@ class NotificationHelper(private val context: Context) {
     }
 
     fun buildProgress(
-        mode: String,
-        state: String,
+        title: String,
         text: String,
         removed: Int,
         failed: Int,
@@ -39,14 +39,12 @@ class NotificationHelper(private val context: Context) {
         val done = removed + failed
         val pauseOrResume = if (paused) RepostRemoveForegroundService.ACTION_RESUME else RepostRemoveForegroundService.ACTION_PAUSE
         val pauseLabel = if (paused) "Resume" else "Pause"
-        val isTerminal = state.equals("finished", true) || state.equals("stopped", true) || state.equals("error", true)
 
         return NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
-            .setContentTitle("$mode • $state")
+            .setContentTitle(title)
             .setContentText("$text • removed=$removed failed=$failed remaining=$remaining")
-            .setStyle(NotificationCompat.BigTextStyle().bigText("$text\nremoved=$removed • failed=$failed • remaining=$remaining"))
-            .setOngoing(!isTerminal)
+            .setOngoing(!title.contains("Finished", ignoreCase = true) && !title.contains("Stopped", ignoreCase = true))
             .setOnlyAlertOnce(true)
             .setProgress(total.coerceAtLeast(1), done.coerceAtLeast(0), total == 0)
             .addAction(0, pauseLabel, servicePendingIntent(pauseOrResume))

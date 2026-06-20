@@ -6,15 +6,15 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import com.example.tiktokunreposter.config.AppModeStore
-import com.example.tiktokunreposter.config.ClientMode
 import com.example.tiktokunreposter.data.QueueStatus
 import com.example.tiktokunreposter.data.RepostQueueRepository
-import com.example.tiktokunreposter.report.SafeReportManager
+import com.example.tiktokunreposter.session.TikTokSessionManager
+import com.example.tiktokunreposter.tiktok.RemoveResult
 import com.example.tiktokunreposter.tiktok.TikTokApiErrorCategory
 import com.example.tiktokunreposter.tiktok.TikTokApiException
 import com.example.tiktokunreposter.tiktok.TikTokClient
-import com.example.tiktokunreposter.tiktok.TikTokClientFactory
+import com.example.tiktokunreposter.tiktok.TikTokEndpoints
+import com.example.tiktokunreposter.tiktok.TikTokWebApiClient
 import com.example.tiktokunreposter.util.SafetyController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,7 +22,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class RepostRemoveForegroundService : Service() {
@@ -33,30 +32,26 @@ class RepostRemoveForegroundService : Service() {
 
     private lateinit var notificationHelper: NotificationHelper
     private lateinit var queue: RepostQueueRepository
-    private lateinit var reports: SafeReportManager
     private lateinit var client: TikTokClient
-    private var mode: ClientMode = ClientMode.MOCK
-    private var startedAt: Long = 0L
-    private var lastErrorCategory: TikTokApiErrorCategory? = null
 
     override fun onCreate() {
         super.onCreate()
         notificationHelper = NotificationHelper(this)
         notificationHelper.ensureChannel()
         queue = RepostQueueRepository(this)
-        reports = SafeReportManager(this)
+        client = TikTokWebApiClient(TikTokSessionManager(this))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action ?: ACTION_START) {
-            ACTION_START -> startWork(resolveMode(intent))
+            ACTION_START -> startWork()
             ACTION_PAUSE -> {
                 paused = true
-                updateNotification("paused", "User paused", broadcast = true)
+                updateNotification("Paused", "User paused", broadcast = true)
             }
             ACTION_RESUME -> {
                 paused = false
-                updateNotification("removing", "Resumed", broadcast = true)
+                updateNotification("Removing reposts…", "Resumed", broadcast = true)
             }
             ACTION_STOP -> stopImmediately("Stopped by user")
         }
@@ -70,32 +65,21 @@ class RepostRemoveForegroundService : Service() {
         super.onDestroy()
     }
 
-    private fun resolveMode(intent: Intent?): ClientMode {
-        val raw = intent?.getStringExtra(EXTRA_MODE)
-        return runCatching { ClientMode.valueOf(raw ?: AppModeStore.getMode(this).name) }.getOrDefault(AppModeStore.getMode(this))
-    }
-
-    private fun startWork(requestedMode: ClientMode) {
+    private fun startWork() {
         if (worker?.isActive == true) return
-        mode = requestedMode
-        AppModeStore.setMode(this, mode)
-        client = TikTokClientFactory.create(this, mode)
         stopRequested = false
         paused = false
-        lastErrorCategory = null
-        startedAt = System.currentTimeMillis()
         val initial = notificationHelper.buildProgress(
-            mode = mode.name,
-            state = "idle",
+            title = "Preparing…",
             text = "Starting",
             removed = 0,
             failed = 0,
-            remaining = queue.stats().remaining,
+            remaining = 0,
             paused = false
         )
         startForegroundCompat(initial)
-        updateNotification("checking login", "Starting", broadcast = true)
-        worker = scope.launch { runModeLoop() }
+        updateNotification("Preparing…", "Starting", broadcast = true)
+        worker = scope.launch { runRemovalLoop() }
     }
 
     private fun startForegroundCompat(notification: Notification) {
@@ -110,159 +94,168 @@ class RepostRemoveForegroundService : Service() {
         }
     }
 
-    private suspend fun runModeLoop() {
+    private suspend fun runRemovalLoop() {
         val safety = SafetyController()
         try {
-            updateNotification("checking login", "Checking local session/client", true)
             val login = client.checkLogin()
             if (!login.loggedIn) {
-                val category = login.category ?: TikTokApiErrorCategory.NotLoggedIn
-                throw TikTokApiException(category = category, statusCode = login.statusCode, endpointName = "checkLogin")
+                throw TikTokApiException(
+                    category = login.category ?: TikTokApiErrorCategory.LoginExpired,
+                    message = login.reason ?: "Login required"
+                )
             }
 
-            when (mode) {
-                ClientMode.REAL_SAFE -> {
-                    updateNotification("finished", "REAL_SAFE checked login only. No fetch/remove was attempted.", true)
-                    writeReport("finished")
-                    stopSelfSafely()
-                    return
-                }
-                ClientMode.REAL_DRY_RUN -> {
-                    runDryRunFetchOnly()
-                    writeReport("finished")
-                    stopSelfSafely()
-                    return
-                }
-                ClientMode.MOCK,
-                ClientMode.REAL_UNOFFICIAL_EXPERIMENTAL -> runFetchAndRemoveLoop(safety)
+            if (!TikTokEndpoints.ENABLE_UNOFFICIAL_WEB_ENDPOINTS) {
+                updateNotification(
+                    "Endpoint disabled",
+                    TikTokEndpoints.UNOFFICIAL_DISABLED_MESSAGE,
+                    broadcast = true
+                )
+                safety.stopNow(TikTokEndpoints.UNOFFICIAL_DISABLED_MESSAGE)
+                return
             }
 
-            val reason = safety.stopReasonOrNull()
-            if (reason != null) {
-                updateNotification("stopped", reason, true)
-                writeReport("stopped")
-            } else {
-                updateNotification("finished", "Finished", true)
-                writeReport("finished")
+            updateNotification("Listing reposts…", "Fetching queue", broadcast = true)
+            fetchQueuePages(safety)
+
+            while (!stopRequested && safety.canContinue()) {
+                while (paused && !stopRequested) {
+                    updateNotification("Paused", "Tap Resume to continue", broadcast = true)
+                    delay(1_000)
+                }
+                val next = queue.nextPending() ?: break
+                var attempt = 0
+                var processed = false
+                while (!processed && attempt < 3 && !stopRequested && safety.canContinue()) {
+                    attempt++
+                    try {
+                        when (val result = client.removeRepost(next.videoId)) {
+                            is RemoveResult.Success -> {
+                                queue.mark(next.videoId, QueueStatus.SUCCESS)
+                                safety.onSuccess()
+                                processed = true
+                            }
+                            is RemoveResult.EndpointDisabled -> {
+                                queue.mark(next.videoId, QueueStatus.SKIPPED, result.safeMessage)
+                                safety.onFailure(TikTokApiErrorCategory.EndpointDisabled)
+                                updateNotification("Endpoint disabled", result.safeMessage, broadcast = true)
+                                stopRequested = true
+                                processed = true
+                            }
+                            is RemoveResult.Failed -> {
+                                queue.mark(next.videoId, QueueStatus.FAILED, result.safeMessage)
+                                safety.onFailure(result.category)
+                                updateNotification("Remove failed", result.safeMessage, broadcast = true)
+                                if (safety.shouldStopFor(result.category)) stopRequested = true
+                                processed = true
+                            }
+                        }
+                    } catch (e: TikTokApiException) {
+                        if (safety.shouldStopFor(e.category)) {
+                            queue.mark(next.videoId, QueueStatus.FAILED, e.safeUserMessage())
+                            safety.onFailure(e.category)
+                            updateNotification(e.titleForUi(), e.safeUserMessage(), broadcast = true)
+                            stopRequested = true
+                            processed = true
+                        } else if (attempt >= 3) {
+                            queue.mark(next.videoId, QueueStatus.FAILED, e.safeUserMessage())
+                            safety.onFailure(e.category)
+                            processed = true
+                        } else {
+                            delay(safety.backoffMs(attempt))
+                        }
+                    } catch (e: Exception) {
+                        if (attempt >= 3) {
+                            queue.mark(next.videoId, QueueStatus.FAILED, e.safeMessage())
+                            safety.onFailure(TikTokApiErrorCategory.Unknown)
+                            processed = true
+                        } else {
+                            delay(safety.backoffMs(attempt))
+                        }
+                    }
+                }
+                updateNotification("Removing reposts…", "Working", broadcast = true)
+                if (!stopRequested && safety.canContinue()) delay(safety.nextDelayMs())
             }
         } catch (e: TikTokApiException) {
-            lastErrorCategory = e.category
-            updateNotification("error", "Stopped safely: ${e.category}", true)
-            writeReport("error")
+            updateNotification(e.titleForUi(), e.safeUserMessage(), broadcast = true)
         } catch (e: Exception) {
-            lastErrorCategory = TikTokApiErrorCategory.Unknown
-            updateNotification("error", "Stopped safely: Unknown", true)
-            writeReport("error")
+            updateNotification("Stopped", e.safeMessage(), broadcast = true)
         } finally {
-            stopSelfSafely()
+            val reason = safety.stopReasonOrNull()
+            if (reason != null) updateNotification("Stopped safely", reason, broadcast = true)
+            else if (!stopRequested) updateNotification("Finished", "Queue done", broadcast = true)
+            stopForeground(STOP_FOREGROUND_DETACH)
+            stopSelf()
         }
     }
 
-    private suspend fun runDryRunFetchOnly() {
-        updateNotification("fetching reposts", "REAL_DRY_RUN fetch only; no remove will run", true)
-        val page = client.fetchRepostedVideos(cursor = null)
-        queue.clear()
-        queue.upsertPending(page.items.map { it.videoId })
-        page.items.forEach { queue.mark(it.videoId, QueueStatus.SKIPPED, "dry-run-no-remove") }
-        updateNotification("finished", "Dry run fetched ${page.items.size} item(s). Removed 0.", true)
-    }
-
-    private suspend fun runFetchAndRemoveLoop(safety: SafetyController) {
-        if (queue.stats().remaining == 0) {
-            updateNotification("fetching reposts", "Fetching repost list", true)
-            val page = client.fetchRepostedVideos(cursor = null)
-            queue.upsertPending(page.items.map { it.videoId })
-            updateNotification("removing", "Queued ${page.items.size} item(s)", true)
-        } else {
-            updateNotification("removing", "Resuming saved queue", true)
-        }
-
-        while (scope.coroutineContext.isActive && !stopRequested && safety.canContinue()) {
-            waitIfPaused()
-            if (stopRequested) break
-            val next = queue.nextPending() ?: break
-            try {
-                updateNotification("removing", "Removing one item", true)
-                val result = client.removeRepost(next.videoId)
-                if (result.success) {
-                    queue.mark(next.videoId, QueueStatus.SUCCESS)
-                    safety.onSuccess()
-                } else {
-                    val category = result.category ?: TikTokApiErrorCategory.Unknown
-                    queue.mark(next.videoId, QueueStatus.FAILED, category.name)
-                    safety.onFailure(category)
-                }
-                updateNotification("removing", "Progress updated", true)
-                delay(safety.nextDelayMs())
+    private suspend fun fetchQueuePages(safety: SafetyController) {
+        var cursor: String? = null
+        var pages = 0
+        do {
+            val page = try {
+                client.fetchRepostedVideos(cursor)
             } catch (e: TikTokApiException) {
-                lastErrorCategory = e.category
-                queue.mark(next.videoId, QueueStatus.FAILED, e.category.name)
                 safety.onFailure(e.category)
-                updateNotification("error", "Safe stop/error: ${e.category}", true)
-                if (safety.shouldStopFor(e.category)) break
-                delay(safety.backoffMs(queue.stats().failed))
+                throw e
             }
-        }
-    }
-
-    private suspend fun waitIfPaused() {
-        while (paused && !stopRequested && scope.coroutineContext.isActive) {
-            updateNotification("paused", "Paused", true)
-            delay(700L)
-        }
+            queue.upsertPending(page.videos.map { it.id })
+            cursor = page.nextCursor
+            pages++
+            updateNotification(
+                "Listing reposts…",
+                "Fetched page $pages • found=${page.rawCount}",
+                broadcast = true
+            )
+            delay(safety.nextDelayMs())
+        } while (page.hasMore && !cursor.isNullOrBlank() && !stopRequested && pages < MAX_PAGES_PER_RUN)
     }
 
     private fun stopImmediately(reason: String) {
         stopRequested = true
-        paused = false
-        updateNotification("stopped", reason, broadcast = true)
-        writeReport("stopped")
-        stopSelfSafely()
-    }
-
-    private fun stopSelfSafely() {
-        runCatching { if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_DETACH) else @Suppress("DEPRECATION") stopForeground(false) }
+        worker?.cancel()
+        updateNotification("Stopped", reason, broadcast = true)
+        stopForeground(STOP_FOREGROUND_DETACH)
         stopSelf()
     }
 
-    private fun writeReport(state: String) {
-        runCatching {
-            reports.writeLastRunReport(
-                mode = mode,
-                startedAt = if (startedAt == 0L) System.currentTimeMillis() else startedAt,
-                finishedAt = System.currentTimeMillis(),
-                stats = queue.stats(),
-                lastErrorCategory = lastErrorCategory,
-                state = state
-            )
-        }
-    }
-
-    private fun updateNotification(state: String, text: String, broadcast: Boolean) {
+    private fun updateNotification(title: String, text: String, broadcast: Boolean) {
         val stats = queue.stats()
-        val notification = notificationHelper.buildProgress(
-            mode = mode.name,
-            state = state,
+        notificationHelper.notify(notificationHelper.buildProgress(
+            title = title,
             text = text,
             removed = stats.success,
             failed = stats.failed,
             remaining = stats.remaining,
             paused = paused
-        )
-        notificationHelper.notify(notification)
+        ))
         if (broadcast) {
-            sendBroadcast(Intent(ACTION_PROGRESS).apply {
-                setPackage(packageName)
-                putExtra(EXTRA_MODE, mode.name)
-                putExtra(EXTRA_STATE, state)
+            sendBroadcast(Intent(ACTION_PROGRESS).setPackage(packageName).apply {
+                putExtra(EXTRA_TITLE, title)
                 putExtra(EXTRA_TEXT, text)
                 putExtra(EXTRA_REMOVED, stats.success)
                 putExtra(EXTRA_FAILED, stats.failed)
-                putExtra(EXTRA_SKIPPED, stats.skipped)
                 putExtra(EXTRA_REMAINING, stats.remaining)
                 putExtra(EXTRA_TOTAL, stats.total)
             })
         }
+    }
+
+    private fun Throwable.safeMessage(): String = when (this) {
+        is TikTokApiException -> safeUserMessage()
+        else -> message?.replace(Regex("[\\r\\n]"), " ")?.take(120) ?: "Unknown error"
+    }
+
+    private fun TikTokApiException.titleForUi(): String = when (category) {
+        TikTokApiErrorCategory.NotLoggedIn -> "Not logged in"
+        TikTokApiErrorCategory.LoginExpired -> "Login expired"
+        TikTokApiErrorCategory.ChallengeRequired -> "Challenge required"
+        TikTokApiErrorCategory.RateLimited -> "Rate limited"
+        TikTokApiErrorCategory.NetworkError -> "Network error"
+        TikTokApiErrorCategory.ParseError -> "Parse error"
+        TikTokApiErrorCategory.EndpointDisabled -> "Endpoint disabled"
+        TikTokApiErrorCategory.Unknown -> "Stopped"
     }
 
     companion object {
@@ -272,13 +265,13 @@ class RepostRemoveForegroundService : Service() {
         const val ACTION_STOP = "com.example.tiktokunreposter.action.STOP"
         const val ACTION_PROGRESS = "com.example.tiktokunreposter.action.PROGRESS"
 
-        const val EXTRA_MODE = "mode"
-        const val EXTRA_STATE = "state"
+        const val EXTRA_TITLE = "title"
         const val EXTRA_TEXT = "text"
         const val EXTRA_REMOVED = "removed"
         const val EXTRA_FAILED = "failed"
-        const val EXTRA_SKIPPED = "skipped"
         const val EXTRA_REMAINING = "remaining"
         const val EXTRA_TOTAL = "total"
+
+        private const val MAX_PAGES_PER_RUN = 100
     }
 }

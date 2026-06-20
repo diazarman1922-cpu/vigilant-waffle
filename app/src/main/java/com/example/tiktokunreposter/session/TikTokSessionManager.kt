@@ -1,83 +1,80 @@
 package com.example.tiktokunreposter.session
 
 import android.content.Context
-import android.os.Build
 import android.webkit.CookieManager
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.example.tiktokunreposter.tiktok.CookieHeaderBuilder
-import com.example.tiktokunreposter.tiktok.SafeSessionInfo
 
 class TikTokSessionManager(context: Context) {
     private val appContext = context.applicationContext
-    private val prefs by lazy {
-        val key = MasterKey.Builder(appContext)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        EncryptedSharedPreferences.create(
-            appContext,
-            PREFS,
-            key,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
-    }
+    private val cookieHeaderBuilder = CookieHeaderBuilder()
 
-    fun saveSession(cookieHeader: String, secUid: String? = null) {
-        val sanitized = CookieHeaderBuilder.sanitizeCookieHeader(cookieHeader)
-        require(sanitized.isNotBlank()) { "Empty TikTok cookie header" }
+    private val masterKey = MasterKey.Builder(appContext)
+        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+        .build()
+
+    private val prefs = EncryptedSharedPreferences.create(
+        appContext,
+        "tiktok_session_encrypted",
+        masterKey,
+        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+    )
+
+    fun hasSession(): Boolean = !getCookieHeader().isNullOrBlank()
+
+    /**
+     * Raw Cookie header for TikTok only. Never print this, never show in UI,
+     * never send to non-TikTok domains.
+     */
+    fun getCookieHeader(): String? = prefs.getString(KEY_COOKIE_HEADER, null)
+
+    fun getSecUid(): String? = prefs.getString(KEY_SEC_UID, null)
+
+    fun getUserAgent(): String? = prefs.getString(KEY_USER_AGENT, null)
+
+    fun saveSession(cookieHeader: String, secUid: String?, userAgent: String? = null) {
+        val sanitized = cookieHeaderBuilder.sanitize(cookieHeader)
+            ?: throw IllegalArgumentException("Cookie header cannot be blank")
         prefs.edit()
-            .putString(KEY_COOKIE, sanitized)
-            .putString(KEY_SEC_UID, secUid?.takeIf { it.isNotBlank() })
+            .putString(KEY_COOKIE_HEADER, sanitized)
+            .putString(KEY_SEC_UID, secUid?.takeIf { it.isNotBlank() && it != "null" })
+            .putString(KEY_USER_AGENT, userAgent?.takeIf { it.isNotBlank() })
             .putLong(KEY_SAVED_AT, System.currentTimeMillis())
             .apply()
     }
 
-    fun hasSession(): Boolean = !getCookieHeader().isNullOrBlank()
-
-    fun getCookieHeader(): String? = prefs.getString(KEY_COOKIE, null)
-        ?.let { CookieHeaderBuilder.sanitizeCookieHeader(it) }
-        ?.takeIf { it.isNotBlank() }
-
-    fun getSecUid(): String? = prefs.getString(KEY_SEC_UID, null)?.takeIf { it.isNotBlank() }
-
-    fun getSavedAt(): Long? = prefs.getLong(KEY_SAVED_AT, 0L).takeIf { it > 0L }
-
-    fun describeSessionSafely(): SafeSessionInfo = CookieHeaderBuilder.safeDescription(
-        raw = getCookieHeader(),
-        savedAt = getSavedAt(),
-        secUid = getSecUid()
-    )
-
-    fun redactForUi(): String {
-        val info = describeSessionSafely()
-        return if (!info.hasCookies) {
-            "No TikTok WebView session saved"
-        } else {
-            "TikTok cookies present • count=${info.cookieCount} • msToken=${present(info.hasMsToken)} • csrf=${present(info.hasCsrf)} • secUid=${present(info.hasSecUid)}"
-        }
+    fun updateSecUid(secUid: String?) {
+        prefs.edit()
+            .putString(KEY_SEC_UID, secUid?.takeIf { it.isNotBlank() && it != "null" })
+            .apply()
     }
 
-    fun clearSession(clearAppWebViewCookies: Boolean = false) {
+    fun clearSession() {
         prefs.edit().clear().apply()
-        if (clearAppWebViewCookies) {
-            val manager = CookieManager.getInstance()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                manager.removeAllCookies(null)
-                manager.flush()
-            } else {
-                @Suppress("DEPRECATION")
-                manager.removeAllCookie()
-            }
-        }
+        val cm = CookieManager.getInstance()
+        cm.removeAllCookies(null)
+        cm.flush()
     }
 
-    private fun present(value: Boolean): String = if (value) "present" else "not found"
+    fun getSavedAt(): Long = prefs.getLong(KEY_SAVED_AT, 0L)
+
+    /** Never include actual cookie/token values in logs, crash messages, or UI. */
+    fun redactForUi(): String {
+        val saved = getSavedAt()
+        val hasSecUid = !getSecUid().isNullOrBlank()
+        return if (saved == 0L) {
+            "No local session"
+        } else {
+            "Local encrypted session saved • secUid=${if (hasSecUid) "yes" else "not yet"}"
+        }
+    }
 
     companion object {
-        private const val PREFS = "encrypted_tiktok_session"
-        private const val KEY_COOKIE = "cookie_header"
+        private const val KEY_COOKIE_HEADER = "cookie_header"
         private const val KEY_SEC_UID = "sec_uid"
+        private const val KEY_USER_AGENT = "user_agent"
         private const val KEY_SAVED_AT = "saved_at"
     }
 }

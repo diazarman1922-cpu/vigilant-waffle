@@ -28,7 +28,7 @@ class RepostQueueRepository(context: Context) {
     @Synchronized
     fun mark(videoId: String, status: QueueStatus, message: String? = null) {
         val items = loadMutable().map {
-            if (it.videoId == videoId) it.copy(status = status, message = message?.take(200), updatedAt = System.currentTimeMillis()) else it
+            if (it.videoId == videoId) it.copy(status = status, message = message, updatedAt = System.currentTimeMillis()) else it
         }
         save(items)
     }
@@ -46,9 +46,6 @@ class RepostQueueRepository(context: Context) {
     }
 
     @Synchronized
-    fun loadAll(): List<QueueItem> = loadMutable().toList()
-
-    @Synchronized
     fun exportJsonText(): String = if (file.exists()) file.readText() else "[]"
 
     @Synchronized
@@ -59,12 +56,12 @@ class RepostQueueRepository(context: Context) {
             MutableList(arr.length()) { i ->
                 val obj = arr.getJSONObject(i)
                 QueueItem(
-                    videoId = obj.optString("videoId"),
-                    status = runCatching { QueueStatus.valueOf(obj.optString("status", QueueStatus.PENDING.name)) }.getOrDefault(QueueStatus.PENDING),
+                    videoId = obj.getString("videoId"),
+                    status = QueueStatus.valueOf(obj.optString("status", QueueStatus.PENDING.name)),
                     message = obj.optString("message").takeIf { it.isNotBlank() },
                     updatedAt = obj.optLong("updatedAt", System.currentTimeMillis())
                 )
-            }.filter { it.videoId.isNotBlank() }.toMutableList()
+            }
         } catch (_: Exception) {
             mutableListOf()
         }

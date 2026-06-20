@@ -1,13 +1,16 @@
 package com.example.tiktokunreposter.tiktok
 
-import android.content.Context
-import com.example.tiktokunreposter.config.ClientMode
+import com.example.tiktokunreposter.session.TikTokSessionManager
+import okhttp3.OkHttpClient
 
-/**
- * Compatibility wrapper for older project versions.
- * New code should use TikTokClientFactory directly.
- */
-object TikTokClientOfficialOrWeb {
-    fun create(context: Context, mode: ClientMode = ClientMode.REAL_SAFE): TikTokClient =
-        TikTokClientFactory.create(context, mode)
-}
+/** Backward-compatible name from the first skeleton. Prefer TikTokWebApiClient. */
+@Deprecated("Use TikTokWebApiClient instead")
+class TikTokClientOfficialOrWeb(
+    sessionManager: TikTokSessionManager,
+    http: OkHttpClient = OkHttpClient(),
+    enableUnofficialWeb: Boolean = TikTokEndpoints.ENABLE_UNOFFICIAL_WEB_ENDPOINTS
+) : TikTokWebApiClient(
+    sessionManager = sessionManager,
+    http = http,
+    unofficialEndpointsEnabled = enableUnofficialWeb
+)

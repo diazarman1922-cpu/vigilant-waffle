@@ -1,30 +1,53 @@
 package com.example.tiktokunreposter.tiktok
 
-import com.example.tiktokunreposter.BuildConfig
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 
+/**
+ * Endpoint config lives in one file so experimental unofficial endpoints are easy
+ * to audit, disable, or replace. Default is intentionally false.
+ */
 object TikTokEndpoints {
-    const val HOST_WWW = "www.tiktok.com"
-    const val HOST_ROOT = "tiktok.com"
-    const val BASE_WEB = "https://www.tiktok.com"
+    const val ENABLE_UNOFFICIAL_WEB_ENDPOINTS: Boolean = false
 
-    // Public/unofficial endpoints seen in open-source browser-extension code.
-    // Not official TikTok Developer API. OFF by default via BuildConfig.
-    const val REPOST_LIST_PATH = "/api/repost/item_list/"
-    const val REMOVE_REPOST_PATH = "/tiktok/v1/upvote/delete"
+    const val OFFICIAL_LOGIN_KIT_DOC = "https://developers.tiktok.com/doc/login-kit-web/"
+    const val OFFICIAL_RESEARCH_REPOSTED_VIDEOS = "https://open.tiktokapis.com/v2/research/user/reposted_videos/"
+    const val OFFICIAL_CONTENT_POSTING = "https://open.tiktokapis.com/v2/post/"
 
-    const val ENDPOINT_CHECK_LOGIN = "checkLogin"
-    const val ENDPOINT_FETCH_REPOSTS = "fetchRepostedVideos"
-    const val ENDPOINT_REMOVE_REPOST = "removeRepost"
+    const val TIKTOK_WEB_BASE = "https://www.tiktok.com"
+    const val TIKTOK_HOME = "$TIKTOK_WEB_BASE/"
 
-    val ENABLE_UNOFFICIAL_WEB_ENDPOINTS: Boolean
-        get() = BuildConfig.ENABLE_UNOFFICIAL_WEB_ENDPOINTS
+    /** Publicly observed in open-source browser extensions; not a TikTok Developer API. */
+    const val WEB_REPOST_LIST_NAME = "unofficial.web.repost.item_list"
+    const val WEB_REPOST_LIST_PATH = "/api/repost/item_list/"
 
-    fun repostListUrl(cursor: String?, secUid: String?): String {
-        val safeCursor = cursor?.takeIf { it.isNotBlank() } ?: "0"
-        val safeSecUid = secUid?.takeIf { it.isNotBlank() }.orEmpty()
-        return "$BASE_WEB$REPOST_LIST_PATH?aid=1988&count=30&cursor=$safeCursor&secUid=$safeSecUid"
+    /** Publicly observed in open-source browser extensions; not a TikTok Developer API. */
+    const val WEB_REMOVE_REPOST_NAME = "unofficial.web.upvote.delete"
+    const val WEB_REMOVE_REPOST_PATH = "/tiktok/v1/upvote/delete"
+
+    const val CHECK_LOGIN_NAME = "web.home.check"
+
+    const val UNOFFICIAL_DISABLED_MESSAGE =
+        "Remove repost endpoint belum diaktifkan. Aktifkan experimental unofficial endpoint hanya kalau kamu paham risikonya."
+
+    fun repostListUrl(secUid: String, cursor: String?, count: Int = 30): HttpUrl {
+        return TIKTOK_WEB_BASE.toHttpUrl().newBuilder()
+            .addPathSegments(WEB_REPOST_LIST_PATH.trim('/'))
+            .addQueryParameter("aid", "1988")
+            .addQueryParameter("count", count.coerceIn(1, 30).toString())
+            .addQueryParameter("coverFormat", "2")
+            .addQueryParameter("cursor", cursor?.takeIf { it.isNotBlank() } ?: "0")
+            .addQueryParameter("needPinnedItemIds", "true")
+            .addQueryParameter("post_item_list_request_type", "0")
+            .addQueryParameter("secUid", secUid)
+            .build()
     }
 
-    fun removeRepostUrl(videoId: String): String =
-        "$BASE_WEB$REMOVE_REPOST_PATH?aid=1988&item_id=${videoId.trim()}"
+    fun removeRepostUrl(videoId: String): HttpUrl {
+        return TIKTOK_WEB_BASE.toHttpUrl().newBuilder()
+            .addPathSegments(WEB_REMOVE_REPOST_PATH.trim('/'))
+            .addQueryParameter("aid", "1988")
+            .addQueryParameter("item_id", videoId)
+            .build()
+    }
 }

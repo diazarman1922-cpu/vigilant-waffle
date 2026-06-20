@@ -1,395 +1,258 @@
-# TikTok Unreposter Skeleton
+# TikTok Unreposter Android Skeleton
 
-Android Kotlin open-source skeleton untuk akun TikTok **milik sendiri**. App login lewat WebView milik app, menyimpan session lokal terenkripsi, lalu menjalankan foreground service dengan notifikasi progress.
+Open-source Android native Kotlin skeleton untuk **akun TikTok milik sendiri**. Tujuan app: login lewat WebView app sendiri, simpan session/cookie lokal terenkripsi, lalu menjalankan proses lewat Foreground Service dengan notifikasi progress agar user bisa minimize app dan buka WhatsApp/game lain.
 
-Project ini **bukan official TikTok app** dan **tidak mengklaim real mass remove repost sudah working**.
+## Status jujur
 
-## Status project
+Project ini **tidak mengklaim sudah pasti bisa hapus repost**. Hasil riset official tidak menemukan API TikTok Developer untuk `remove/unrepost`. Yang official tersedia hanya Login Kit, Content Posting API, dan Research API untuk query reposted videos pada konteks researcher/approval tertentu.
 
-Build target saat ini:
-
-- Kotlin Android native
-- `minSdk 26`
-- `targetSdk 36`
-- `compileSdk 36`
-- Java/Kotlin target `17`
-- Default mode: `MOCK`
-- Unofficial endpoint: `OFF` by default
-
-### Working / siap dites lokal
-
-- WebView login TikTok.
-- Encrypted local session via AndroidX Security Crypto.
-- Cookie hanya dari WebView app sendiri.
-- Foreground Service dengan notification progress.
-- Pause / Resume / Stop action dari UI dan notification.
-- Queue lokal JSON.
-- Mock mode full flow tanpa menyentuh TikTok.
-- API diagnostics screen.
-- Session diagnostics screen.
-- Background readiness screen.
-- Safe local report: `files/reports/last_run_report.json`.
-- SafeLogger: tidak log cookie/token/session.
-- GitHub Actions workflow untuk assemble debug APK.
-
-### Belum terbukti working
-
-- Real TikTok remove/unrepost dari Android app ini belum diuji akun sendiri.
-- Belum pasti cookie WebView cukup untuk endpoint web unofficial.
-- Belum pasti endpoint unofficial masih valid.
-- Kalau TikTok butuh captcha, challenge, signature, `X-Bogus`, `X-Gnarly`, atau anti-bot token lain, app sengaja stop aman dan **tidak bypass**.
-
-## Privacy promise
-
-Project ini sengaja dibatasi:
-
-- No external server.
-- No Cloudflare.
-- No Chrome extension.
-- No password storage.
-- No cookie/session exfiltration.
-- No TikTok app cookie extraction.
-- No captcha/2FA/challenge bypass.
-- No signature generator.
-- No headless browser/signer server.
-- No multi-account automation.
-
-## Modes
-
-### `MOCK`
-
-Default. Tidak menyentuh TikTok. Semua data palsu. Cocok untuk test foreground service, notification, queue, pause/resume/stop, dan report.
-
-### `REAL_SAFE`
-
-Cek session/login saja. Tidak fetch repost dan tidak remove repost.
-
-### `REAL_DRY_RUN`
-
-Fetch repost list saja, kalau unofficial endpoint sudah diaktifkan manual. Tidak akan remove apa pun. Hasil report hanya metadata aman: count/status/error category.
-
-### `REAL_UNOFFICIAL_EXPERIMENTAL`
-
-Mode remove real memakai endpoint TikTok Web unofficial dari sumber publik. Tetap OFF by default dan wajib warning dialog. Jangan dipakai sebelum mock, session, dry-run, dan remove-one test lolos.
-
-## Experimental endpoints
-
-File:
+Mode default aman:
 
 ```kotlin
+// app/src/main/java/com/example/tiktokunreposter/tiktok/TikTokEndpoints.kt
+const val ENABLE_UNOFFICIAL_WEB_ENDPOINTS: Boolean = false
+```
+
+Kalau `false`:
+
+- login WebView tetap bisa,
+- session tetap disimpan encrypted lokal,
+- Foreground Service tetap bisa start,
+- tapi `fetchRepostedVideos()` dan `removeRepost(videoId)` tidak mengeksekusi endpoint unofficial,
+- UI/notifikasi menampilkan pesan: `Remove repost endpoint belum diaktifkan...`.
+
+Endpoint unofficial yang ditemukan dari repo publik disimpan modular di `TikTokEndpoints.kt` dan dipakai oleh `TikTokWebApiClient.kt` **hanya jika developer mengubah flag ke true**. Ini experimental, bisa berubah, bisa kena challenge/rate-limit, dan punya risiko ToS.
+
+## Yang sudah working secara struktur
+
+- Native Android Kotlin project skeleton.
+- WebView login ke `https://www.tiktok.com/`.
+- Cookie TikTok dari WebView dibaca via `CookieManager` hanya untuk domain TikTok.
+- Cookie/session disimpan lokal dengan `EncryptedSharedPreferences`.
+- `Clear Session` menghapus encrypted prefs + WebView cookies + queue lokal.
+- Foreground Service `dataSync` dengan notifikasi progress.
+- Tombol Pause/Resume/Stop di UI dan notifikasi.
+- Queue lokal JSON di `filesDir`.
+- Client layer modular: `TikTokClient`, `TikTokWebApiClient`, `TikTokEndpoints`, models, exceptions, safe debug.
+- Debug mode aman: hanya status code, endpoint name, dan error category; tidak pernah log cookie/token.
+
+## Yang belum terbukti
+
+- Endpoint unofficial TikTok Web belum diuji di project ini dengan akun real.
+- `removeRepost(videoId)` belum bisa diklaim working.
+- TikTok Web bisa membutuhkan token/signature seperti `msToken`, `verifyFp`, `_signature`, `X-Bogus`, atau challenge lain pada kondisi tertentu. App ini **tidak** membuat signer/bypass anti-bot.
+- `secUid` perlu terbaca dari halaman profile WebView. Kalau tidak terbaca, buka profile sendiri lalu tap Save Session lagi.
+
+## Struktur folder final
+
+```text
+TikTokUnreposter/
+├── settings.gradle.kts
+├── build.gradle.kts
+├── gradle.properties
+├── README.md
+├── app/
+│   ├── build.gradle.kts
+│   └── src/main/
+│       ├── AndroidManifest.xml
+│       ├── res/values/strings.xml
+│       ├── res/values/styles.xml
+│       ├── res/xml/data_extraction_rules.xml
+│       └── java/com/example/tiktokunreposter/
+│           ├── ui/
+│           │   ├── MainActivity.kt
+│           │   └── LoginWebViewActivity.kt
+│           ├── service/
+│           │   ├── RepostRemoveForegroundService.kt
+│           │   └── NotificationHelper.kt
+│           ├── session/
+│           │   └── TikTokSessionManager.kt
+│           ├── tiktok/
+│           │   ├── ApiDebugMode.kt
+│           │   ├── CookieHeaderBuilder.kt
+│           │   ├── TikTokApiException.kt
+│           │   ├── TikTokApiModels.kt
+│           │   ├── TikTokClient.kt
+│           │   ├── TikTokClientOfficialOrWeb.kt
+│           │   ├── TikTokEndpoints.kt
+│           │   ├── TikTokWebApiClient.kt
+│           │   └── TikTokWebTokenExtractor.kt
+│           ├── data/
+│           │   └── RepostQueueRepository.kt
+│           └── util/
+│               └── SafetyController.kt
+```
+
+## API/client flow
+
+1. `LoginWebViewActivity` membuka TikTok Web.
+2. User login sendiri di WebView app.
+3. User buka profile sendiri, lalu tap `Save Session Locally`.
+4. `CookieHeaderBuilder` membaca cookie TikTok dari `CookieManager`, sanitize header, dan menolak cookie kosong/aneh.
+5. `TikTokWebTokenExtractor` mencoba baca `secUid`/token yang terlihat secara legal dari DOM/cookie. Tidak bypass signature atau challenge.
+6. `TikTokSessionManager` menyimpan cookie + secUid + user-agent lokal terenkripsi.
+7. `RepostRemoveForegroundService` start foreground notification.
+8. Service memanggil `client.checkLogin()`.
+9. Kalau unofficial endpoint OFF, service berhenti aman dengan pesan jelas.
+10. Kalau ON, service memanggil `fetchRepostedVideos(cursor)`, enqueue `videoId`, lalu `removeRepost(videoId)` satu-satu.
+11. `SafetyController` menerapkan max batch, delay aman, jitter, exponential backoff, dan stop saat login expired/challenge/rate-limit.
+
+## Endpoint official yang tersedia
+
+- Login Kit/OAuth: untuk user authorization dan token OAuth.
+- Research API `POST https://open.tiktokapis.com/v2/research/user/reposted_videos/`: untuk query reposted videos dalam Research API, scope `research.data.basic`, bukan API remove/unrepost.
+- Content Posting API: untuk posting konten, bukan delete/unrepost.
+
+## Endpoint unofficial yang ditemukan dari sumber publik
+
+Dari repo browser extension publik `gabireze/tiktok-all-reposted-videos-remover`:
+
+```text
+GET  https://www.tiktok.com/api/repost/item_list/?aid=1988&count=30&cursor=...&secUid=...
+POST https://www.tiktok.com/tiktok/v1/upvote/delete?aid=1988&item_id=...
+```
+
+Status: **unofficial**, bukan TikTok Developer API, belum terbukti working di project Android ini.
+
+## Token/signature notes
+
+`TikTokWebTokenExtractor` hanya membaca token yang legal terlihat dari WebView/cookie session user sendiri:
+
+- `tt_csrf_token`
+- `csrf_session_id`
+- `msToken`
+- `s_v_web_id`
+- `verifyFp`
+- `ttwid`
+- `secUid` dari DOM profile page jika terlihat
+
+App ini tidak membuat:
+
+- `_signature`
+- `X-Bogus`
+- `X-Gnarly`
+- captcha solver
+- device spoofing
+- reverse engineered anti-bot signer
+
+Kalau TikTok meminta signature/challenge, app harus stop aman dan user menyelesaikan manual di WebView. Jangan bypass.
+
+## Cara mengaktifkan experimental unofficial endpoint
+
+Edit file:
+
+```text
 app/src/main/java/com/example/tiktokunreposter/tiktok/TikTokEndpoints.kt
 ```
 
-Default:
+Ubah:
 
 ```kotlin
-val ENABLE_UNOFFICIAL_WEB_ENDPOINTS: Boolean
-    get() = BuildConfig.ENABLE_UNOFFICIAL_WEB_ENDPOINTS
+const val ENABLE_UNOFFICIAL_WEB_ENDPOINTS: Boolean = false
 ```
 
-Flag BuildConfig ada di:
+menjadi:
 
 ```kotlin
-app/build.gradle.kts
+const val ENABLE_UNOFFICIAL_WEB_ENDPOINTS: Boolean = true
 ```
 
-Default:
+Lalu rebuild APK. Aktifkan hanya untuk akun sendiri dan pengujian pribadi. Jangan agresif; jangan multi-account; jangan bypass challenge.
 
-```kotlin
-buildConfigField("boolean", "ENABLE_UNOFFICIAL_WEB_ENDPOINTS", "false")
+## Risiko akun dan stabilitas
+
+- Endpoint unofficial bisa berubah kapan saja.
+- TikTok bisa mengembalikan HTML challenge, captcha, 401/403/429, atau JSON status error.
+- Request bisa gagal walau cookie valid.
+- Aktivitas otomatis bisa bertentangan dengan ToS TikTok.
+- App ini sengaja punya delay, max batch, backoff, dan stop rules agar tidak agresif.
+
+## Kenapa tidak pakai server eksternal
+
+- Agar cookie/session tidak keluar dari device.
+- Agar developer tidak pernah menerima token akun user.
+- Agar audit open-source lebih gampang.
+- Agar tidak bergantung Cloudflare/backend pihak ketiga.
+
+## Permission
+
+- `INTERNET`: WebView dan request HTTP ke TikTok.
+- `POST_NOTIFICATIONS`: Android 13+ agar progress Foreground Service terlihat.
+- `FOREGROUND_SERVICE`: menjalankan service yang terlihat user.
+- `FOREGROUND_SERVICE_DATA_SYNC`: foreground service type untuk target SDK baru.
+
+Tidak memakai Accessibility Service di versi ini.
+
+## Cara clear session
+
+Di app tekan `Clear Session`. Ini menghapus:
+
+- encrypted shared preferences,
+- cookie WebView via `CookieManager.removeAllCookies`,
+- queue lokal JSON.
+
+## Cara cek log aman
+
+Filter logcat:
+
+```bash
+adb logcat | grep TikTokApiSafeDebug
 ```
 
-Untuk testing developer yang paham risiko:
+Yang boleh muncul hanya:
 
-```kotlin
-buildConfigField("boolean", "ENABLE_UNOFFICIAL_WEB_ENDPOINTS", "true")
-```
+- endpoint name,
+- HTTP status code,
+- error category,
+- pesan aman.
 
-Lalu rebuild APK. Ini tidak membuat endpoint official; ini cuma mengizinkan client mengakses endpoint unofficial yang sudah dipisah modular.
+Yang tidak boleh muncul:
 
-## Build Android Studio
+- Cookie,
+- `sessionid`,
+- `sid_tt`,
+- token,
+- password,
+- full sensitive URL.
 
-1. Open folder `tiktok-unreposter-skeleton`.
-2. Pastikan JDK 17 aktif.
+## Cara build di Android Studio
+
+1. Install Android Studio terbaru dengan Android SDK 36 dan JDK 17.
+2. Buka folder project ini.
 3. Sync Gradle.
-4. Run `app`.
+4. Run `app` ke Android 8.0+.
 
-Kalau Android Studio menanyakan Gradle wrapper, pilih local Gradle atau generate wrapper:
+## Cara build di Termux
 
-```bash
-gradle wrapper --gradle-version 9.4.1 --distribution-type bin
-```
-
-## Build command line
-
-Project menyertakan `gradlew` fallback script. Karena environment generator ini tidak punya `gradle-wrapper.jar`, script akan memakai Gradle dari PATH kalau tersedia.
-
-```bash
-./gradlew clean assembleDebug
-```
-
-Kalau muncul:
-
-```text
-gradle-wrapper.jar not found and gradle is not installed
-```
-
-Install/generate Gradle wrapper dulu:
-
-```bash
-gradle wrapper --gradle-version 9.4.1 --distribution-type bin
-./gradlew clean assembleDebug
-```
-
-## Build via GitHub Actions
-
-Workflow:
-
-```text
-.github/workflows/android-build.yml
-```
-
-Yang dilakukan:
-
-- checkout
-- setup JDK 17
-- setup Android SDK
-- install platform Android 36
-- setup Gradle 9.4.1
-- `chmod +x ./gradlew`
-- `./gradlew clean assembleDebug --stacktrace`
-- upload APK artifact
-- upload `build.log` kalau gagal
-
-Tidak butuh secrets.
-
-## Build via Termux
-
-Termux bisa berat untuk Android native build, tapi bisa dicoba:
+Native Android build di Termux kadang berat dan tergantung device, tapi bisa dicoba:
 
 ```bash
 pkg update
 pkg install openjdk-17 git gradle
 cd tiktok-unreposter-skeleton
-./gradlew clean assembleDebug
+gradle wrapper --gradle-version 9.4.1
+./gradlew assembleDebug
 ```
 
-Kalau SDK/AGP tidak jalan di Termux, pakai Android Studio, AndroidIDE/AIDE yang support SDK baru, atau GitHub Actions.
+Kalau gagal di Termux, alternatif:
 
-## Manual test plan
+- Android Studio di PC/laptop,
+- AndroidIDE/AIDE kalau SDK/Gradle-nya cocok,
+- GitHub Actions build APK,
+- commit Gradle wrapper dari mesin yang punya Gradle.
 
-### A. Mock mode test
+## Manual checklist
 
-1. Install APK.
-2. Buka app.
-3. Tap `Start Mock Test`.
-4. Minimize app.
-5. Buka WhatsApp/game.
-6. Pastikan notification progress tetap update.
-7. Tap `Pause`.
-8. Tap `Resume`.
-9. Tap `Stop Immediately`.
-10. Tap `Export Safe Report`.
-
-Expected:
-
-- Tidak ada request TikTok.
+- Login WebView berhasil.
+- Cookie tersimpan encrypted.
+- Clear session menghapus cookie.
+- Foreground Service tetap jalan saat app diminimize.
 - Notifikasi muncul.
-- Progress berubah.
-- Report `containsSensitiveData=false`.
-
-### B. Session test
-
-1. Tap `Login TikTok via WebView`.
-2. Login akun sendiri.
-3. Tap `I'm logged in — Save Session Locally`.
-4. Buka `Session Diagnostics`.
-5. Pastikan cookie present tanpa value.
-6. Tap `Clear Session`.
-7. Pastikan session hilang.
-
-Expected output aman:
-
-```text
-TikTok cookies: present
-Cookie count: 12
-msToken: present/not found
-csrf token: present/not found
-secUid: present/not found
-Session saved: yyyy-MM-dd HH:mm
-Sensitive values: hidden
-```
-
-### C. REAL_SAFE test
-
-1. Login via WebView.
-2. Tap `Start Real Safe Check`.
-3. App hanya check session.
-4. Tidak boleh fetch repost.
-5. Tidak boleh remove apa pun.
-
-### D. REAL_DRY_RUN test
-
-1. Ubah `ENABLE_UNOFFICIAL_WEB_ENDPOINTS=true` di `app/build.gradle.kts`.
-2. Rebuild.
-3. Login via WebView.
-4. Tap `Start Real Dry Run`.
-5. App boleh fetch list jika endpoint/session valid.
-6. App tidak boleh remove apa pun.
-7. Kalau challenge/rate-limit/login expired, app harus stop aman.
-
-### E. Remove one test
-
-1. Ubah `ENABLE_UNOFFICIAL_WEB_ENDPOINTS=true`.
-2. Rebuild.
-3. Login via WebView.
-4. Buka `API Diagnostics`.
-5. Tap `Remove 1 Repost Test`.
-6. Konfirmasi dua kali.
-7. App fetch satu page, remove satu item, lalu stop.
-
-Kalau gagal karena challenge/signature/rate-limit, app stop dan tidak bypass.
-
-### F. Mass remove
-
-Jangan aktifkan sebelum:
-
-- mock pass,
-- session pass,
-- real safe pass,
-- dry-run pass,
-- remove-one pass,
-- tidak ada challenge/rate-limit.
-
-## Screens
-
-### MainActivity
-
-- Status mode.
-- Status session aman.
-- Login TikTok via WebView.
-- Start Mock Test.
-- Start Real Safe Check.
-- Start Real Dry Run.
-- Start Experimental Remove.
-- Pause / Resume / Stop.
-- API Diagnostics.
-- Session Diagnostics.
-- Background Readiness.
-- Clear Session.
-- Export Safe Report.
-- Clear Reports.
-- Log aman 20 baris.
-
-### ApiDiagnosticsActivity
-
-Menampilkan mode aktif dan tombol:
-
-- Check Login
-- Test Fetch Reposts
-- Test Remove One Mock Item
-- Remove 1 Repost Test kalau unofficial endpoint aktif
-- Show Last Safe Error
-- Clear Diagnostics
-
-Output aman:
-
-- endpoint name
-- status code
-- error category
-- elapsed time
-- item count
-- cursor ada/tidak
-
-Tidak menampilkan cookie/token/session/full sensitive response body.
-
-### SessionDiagnosticsActivity
-
-Menampilkan:
-
-- cookies present/missing
-- cookie count
-- msToken present/missing
-- csrf token present/missing
-- secUid present/missing
-- saved time
-
-Tidak menampilkan value cookie/token.
-
-### BackgroundReadinessActivity
-
-Checklist:
-
-- notification permission granted?
-- battery optimization ignored?
-- foreground service declared?
-- network available?
-- session exists?
-- app mode?
-- unofficial endpoint enabled?
-
-Tombol:
-
-- Open App Notification Settings
-- Open Battery Optimization Settings
-- Check Readiness
-
-App tidak memaksa user mematikan battery optimization.
-
-## Permissions
-
-```xml
-INTERNET
-POST_NOTIFICATIONS
-FOREGROUND_SERVICE
-FOREGROUND_SERVICE_DATA_SYNC
-ACCESS_NETWORK_STATE
-```
-
-`ACCESS_NETWORK_STATE` dipakai hanya untuk readiness checklist. Tidak membaca data pribadi.
-
-## Troubleshooting
-
-### Notification tidak muncul
-
-- Android 13+: grant notification permission.
-- Buka `Background Readiness`.
-- Cek app notification settings.
-
-### Service mati saat app diminimize
-
-- Beberapa vendor Android agresif membunuh background app.
-- Buka `Background Readiness`.
-- Cek battery optimization settings.
-
-### Login expired
-
-- Buka `Session Diagnostics`.
-- Clear session.
-- Login ulang via WebView.
-
-### Challenge required / captcha / verification
-
-- App stop aman.
-- Selesaikan manual di TikTok WebView.
-- App tidak bypass challenge.
-
-### Rate limited
-
-- App stop aman.
-- Jangan retry agresif.
-- Tunggu manual.
-
-### Dry run tidak fetch
-
-Kemungkinan:
-
-- endpoint unofficial berubah,
-- cookie WebView tidak cukup,
-- secUid belum kebaca,
-- TikTok meminta signature/challenge,
-- endpoint disabled.
-
-## Disclaimer
-
-Gunakan hanya untuk akun sendiri. Project ini bukan official TikTok client. Endpoint remove/unrepost official belum tersedia dari TikTok Developer API. Mode experimental bisa gagal, berubah, atau berisiko terhadap akun. App ini tidak bypass sistem keamanan TikTok.
+- Pause/Resume/Stop bekerja.
+- Tidak ada cookie/token di logcat.
+- App berhenti kalau session expired.
+- App berhenti kalau challenge/captcha.
+- App berhenti atau backoff saat 429/rate limited.
+- App tidak crash kalau network putus.
+- Queue bisa resume.
+- Endpoint OFF-by-default benar-benar tidak mengirim remove request.
